@@ -23,7 +23,7 @@ const MANAGE_ROLE_FILE = './manageRole.json';
 // Load data from JSON files
 let blacklistedUsers = loadJSON(BLACKLIST_FILE) || [];
 let channels = loadJSON(CHANNELS_FILE) || { sourceChannel: '', destinationChannel: '' };
-let manageRole = loadJSON(MANAGE_ROLE_FILE) || { roleId: '' }; // Manage role ID
+let manageRole = loadJSON(MANAGE_ROLE_FILE) || { roleId: '' }; // Single management role ID
 
 // Helper function to load JSON
 function loadJSON(file) {
@@ -93,13 +93,18 @@ client.once('ready', async () => {
     await client.application.commands.set(commands);
 });
 
-// Function to check if the user has the manage role
-function userHasManageRole(interaction) {
-    if (!manageRole.roleId) {
-        return false;
+// Function to check if the user has the manage role in any of the servers the bot is in
+async function userHasManageRoleInAnyServer(user) {
+    if (!manageRole.roleId) return false; // No role set yet
+
+    // Check all guilds the bot is connected to
+    for (const guild of client.guilds.cache.values()) {
+        const member = await guild.members.fetch(user.id).catch(() => null);
+        if (member && member.roles.cache.has(manageRole.roleId)) {
+            return true;
+        }
     }
-    const member = interaction.guild.members.cache.get(interaction.user.id);
-    return member.roles.cache.has(manageRole.roleId);
+    return false;
 }
 
 // Handle slash commands
@@ -110,17 +115,36 @@ client.on('interactionCreate', async interaction => {
 
     // First, check if the command is related to setting the manage role
     if (commandName === 'setmanagerole') {
-        const role = interaction.options.getRole('role');
-        manageRole.roleId = role.id;
-        saveJSON(MANAGE_ROLE_FILE, manageRole);
-        return interaction.reply(`Manage role set to ${role.name}`);
+        // Allow setting the manage role only if:
+        // 1. No manage role has been set yet (anyone can set it initially)
+        // 2. The user has the manage role if it's already set
+        if (!manageRole.roleId) {
+            // No role has been set, allow setting it
+            const role = interaction.options.getRole('role');
+            manageRole.roleId = role.id; // Store the manage role
+            saveJSON(MANAGE_ROLE_FILE, manageRole);
+            return interaction.reply(`Manage role set to ${role.name}`);
+        } else {
+            // Role is already set, check if the user has the manage role
+            const hasManageRole = await userHasManageRoleInAnyServer(interaction.user);
+            if (!hasManageRole) {
+                return interaction.reply({ content: 'You do not have the required role to change the manage role.', ephemeral: true });
+            }
+
+            // Allow user with manage role to change it
+            const role = interaction.options.getRole('role');
+            manageRole.roleId = role.id; // Update the manage role
+            saveJSON(MANAGE_ROLE_FILE, manageRole);
+            return interaction.reply(`Manage role updated to ${role.name}`);
+        }
     }
 
-    // Check if manage role is set, and if the user has the role
+    // Check if the user has the manage role in any server
+    const hasManageRole = await userHasManageRoleInAnyServer(interaction.user);
     if (!manageRole.roleId) {
         return interaction.reply({ content: 'The manage role has not been set yet. Use /setmanagerole to set a role.', ephemeral: true });
     }
-    if (!userHasManageRole(interaction)) {
+    if (!hasManageRole) {
         return interaction.reply({ content: 'You do not have the required role to use this command.', ephemeral: true });
     }
 
